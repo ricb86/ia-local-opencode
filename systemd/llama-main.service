@@ -1,0 +1,23 @@
+[Unit]
+Description=llama.cpp - gpt-oss-20b local (Vulkan) para OpenCode
+After=default.target
+# O coder nao cabe junto em 8 GB: iniciar um derruba o outro.
+Conflicts=llama-coder.service
+
+# nao ficar reiniciando em loop se o modelo estiver corrompido/ausente
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+Environment=LD_LIBRARY_PATH=%h/.local/share/llama.cpp/current
+Environment=AMD_VULKAN_ICD=RADV
+Environment=MANGOHUD=0
+ExecStart=%h/.local/share/llama.cpp/current/llama-server --model %h/Modelos/gpt-oss-20b-mxfp4.gguf --host 127.0.0.1 --port 8080 --jinja --flash-attn on --threads 8 --threads-batch 12 --no-webui -ngl 99 --n-cpu-moe 18 -c 32768 -ctk q8_0 -ctv q8_0
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:%h/.local/share/llama.cpp/logs/service-main.log
+StandardError=append:%h/.local/share/llama.cpp/logs/service-main.log
+
+[Install]
+WantedBy=default.target

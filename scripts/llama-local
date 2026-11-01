@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# IA local (llama.cpp + Vulkan) para o OpenCode.
+# Rode SEMPRE fora do Flatpak, num terminal normal.
+#
+#   llama-local main     -> gpt-oss-20b (raciocinio/agente)   porta 8080
+#   llama-local small    -> Qwen3 4B    (subagentes rapidos)   porta 8081
+#   llama-local coder    -> Qwen3 8B coder (codigo)            porta 8082
+#   llama-local restart  -> volta ao padrao: servicos main + small
+#   llama-local stop     -> para tudo (manual + servicos)
+#   llama-local status   -> o que esta rodando + VRAM
+#   llama-local teste    -> benchmark do modelo principal
+set -uo pipefail
+
+LLAMA_DIR="$HOME/.local/share/llama.cpp/current"
+MODELS="$HOME/Modelos"
+RUNDIR="$HOME/.local/share/llama.cpp/run"
+LOGDIR="$HOME/.local/share/llama.cpp/logs"
+mkdir -p "$RUNDIR" "$LOGDIR"
+
+export LD_LIBRARY_PATH="$LLAMA_DIR:${LD_LIBRARY_PATH:-}"
+export AMD_VULKAN_ICD=RADV
+export MANGOHUD=0
+
+MAIN_MODEL="${MAIN_MODEL:-$MODELS/gpt-oss-20b-mxfp4.gguf}"
+SMALL_MODEL="${SMALL_MODEL:-$MODELS/qwen3-4b-instruct-2507-q4_k_m.gguf}"
+CODER_MODEL="${CODER_MODEL:-$MODELS/qwen3-8b-q4_k_m.gguf}"
+
+# gpt-oss-20b: 12 GB nao cabem em 8 GB de VRAM.
+# Atencao + camadas densas ficam na GPU; experts (MoE) vao para a RAM.
+# KV cache em q8_0 economiza ~metade da VRAM sem perda perceptivel.
+MAIN_FLAGS="-ngl 99 --n-cpu-moe 18 -c 32768 -ctk q8_0 -ctv q8_0"
+SMALL_FLAGS="-ngl 99 -c 8192 -ctk q8_0 -ctv q8_0"
+# O coder e denso (8B Q4 ~5 GB): cabe inteiro na GPU, mas NAO junto do principal.
+# O kwarg enable_thinking=false (que desligaria o raciocinio) QUEBRA o tool calling
+# do Qwen3 neste build do llama.cpp, entao o coder roda com raciocinio ligado.
+CODER_FLAGS='-ngl 99 -c 16384 -ctk q8_0 -ctv q8_0'
+
+vram() {
+  awk '{printf "%.2f GiB", $1/1073741824}' /sys/class/drm/card*/device/mem_info_vram_used 2>/dev/null | head -1
+  echo
+}
+
+running() { # $1 = porta
+  curl -sf -m 2 "http://127.0.0.1:$1/health" >/dev/null 2>&1
+}
+
+stop_manual() {
+  local p
+  for p in "$RUNDIR"/*.pid; do
+    [ -f "$p" ] || continue
+    kill "$(cat "$p")" 2>/dev/null && echo "parado: $(basename "$p" .pid)"
+    rm -f "$p"
+  done
+}
+
+stop_services() {
+  systemctl --user stop llama-main.service llama-small.service llama-coder.service 2>/dev/null
+}
+
+start() {
+  local name="$1" port="$2" model="$3" flags="$4"
+
+  if running "$port"; then
+    echo "ja esta rodando em http://127.0.0.1:$port"
+    return 0
+  fi
+  if [ ! -f "$model" ]; then
+    echo "ERRO: modelo nao encontrado: $model" >&2
+    echo "      baixe com: ./install.sh  (ou veja o README)" >&2
+    return 1
+  fi
+
+  echo "carregando $name (pode levar 1-2 min)..."
+  # shellcheck disable=SC2086
+  setsid nohup "$LLAMA_DIR/llama-server" \
+    --model "$model" \
+    --host 127.0.0.1 --port "$port" \
+    --jinja --flash-attn on \
+    --threads 8 --threads-batch 12 \
+    --no-webui \
+    $flags \
+    > "$LOGDIR/server-$name.log" 2>&1 < /dev/null &
+  echo $! > "$RUNDIR/$name.pid"
+
+  local i
+  for i in $(seq 1 600); do
+    if running "$port"; then
+      echo "pronto: http://127.0.0.1:$port/v1   (VRAM em uso: $(vram | tr -d '\n'))"
+      return 0
+    fi
+    if ! kill -0 "$(cat "$RUNDIR/$name.pid")" 2>/dev/null; then
+      echo "ERRO: o servidor morreu ao carregar. Ultimas linhas do log:" >&2
+      tail -15 "$LOGDIR/server-$name.log" >&2
+      return 1
+    fi
+    sleep 0.5
+  done
+  echo "ERRO: timeout. Veja $LOGDIR/server-$name.log" >&2
+  return 1
+}
+
+bench() {
+  local model="$1"
+  echo "== benchmark (carrega o modelo; leva ~1-2 min) =="
+  "$LLAMA_DIR/llama-bench" -m "$model" -ngl 99 ${2:-} -p 512 -n 128 -r 1 2>&1 \
+    | grep -Ev 'MANGOHUD' | tail -6 | tee -a "$LOGDIR/bench.log"
+}
+
+case "${1:-}" in
+  main)
+    start "main" 8080 "$MAIN_MODEL" "$MAIN_FLAGS" || exit 1
+    echo
+    echo "No OpenCode: /models -> 'gpt-oss-20b (local)'."
+    ;;
+  small)
+    start "small" 8081 "$SMALL_MODEL" "$SMALL_FLAGS" || exit 1
+    ;;
+  coder)
+    # O coder nao cabe junto do principal em 8 GB: libera a VRAM antes.
+    echo "liberando VRAM (coder roda sozinho)..."
+    stop_manual; stop_services; sleep 3
+    start "coder" 8082 "$CODER_MODEL" "$CODER_FLAGS" || exit 1
+    echo
+    echo "No OpenCode: /models -> 'Qwen3 8B coder (local)'."
+    echo "Para voltar ao padrao: llama-local restart"
+    ;;
+  restart)
+    stop_manual; stop_services; sleep 2
+    systemctl --user daemon-reload
+    systemctl --user start llama-main.service llama-small.service
+    echo "servicos main + small reiniciados; aguarde ~30s e rode: llama-local status"
+    ;;
+  stop)
+    stop_manual
+    stop_services
+    echo "tudo parado."
+    ;;
+  status)
+    if running 8080; then echo "main  : ATIVO http://127.0.0.1:8080"; else echo "main  : parado"; fi
+    if running 8081; then echo "small : ATIVO http://127.0.0.1:8081"; else echo "small : parado"; fi
+    if running 8082; then echo "coder : ATIVO http://127.0.0.1:8082"; else echo "coder : parado"; fi
+    svc=$(systemctl --user is-active llama-main.service llama-small.service llama-coder.service 2>/dev/null | paste -sd, -)
+    echo "systemd: ${svc:-desconhecido}"
+    echo "VRAM  : $(vram | tr -d '\n')"
+    ;;
+  teste)
+    stop_manual; stop_services; sleep 3
+    bench "$MAIN_MODEL" "--n-cpu-moe 18"
+    echo
+    echo "resultado salvo em $LOGDIR/bench.log"
+    ;;
+  *)
+    echo "uso: $(basename "$0") {main|small|coder|restart|stop|status|teste}" >&2
+    exit 1
+    ;;
+esac

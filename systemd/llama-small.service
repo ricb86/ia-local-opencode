@@ -1,0 +1,22 @@
+[Unit]
+Description=llama.cpp - Qwen3 4B local (Vulkan) para subagentes do OpenCode
+After=default.target
+Conflicts=llama-coder.service
+
+# nao ficar reiniciando em loop se o modelo estiver corrompido/ausente
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+Environment=LD_LIBRARY_PATH=%h/.local/share/llama.cpp/current
+Environment=AMD_VULKAN_ICD=RADV
+Environment=MANGOHUD=0
+ExecStart=%h/.local/share/llama.cpp/current/llama-server --model %h/Modelos/qwen3-4b-instruct-2507-q4_k_m.gguf --host 127.0.0.1 --port 8081 --jinja --flash-attn on --threads 8 --threads-batch 12 --no-webui -ngl 99 -c 8192 -ctk q8_0 -ctv q8_0
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:%h/.local/share/llama.cpp/logs/service-small.log
+StandardError=append:%h/.local/share/llama.cpp/logs/service-small.log
+
+[Install]
+WantedBy=default.target

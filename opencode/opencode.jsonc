@@ -1,0 +1,52 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "local/gpt-oss-20b",
+  "providers": {
+    "local": {
+      "name": "Local (llama.cpp Vulkan)",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "http://127.0.0.1:8080/v1"
+      },
+      "models": {
+        "gpt-oss-20b": {
+          "name": "gpt-oss-20b (local)",
+          "limit": { "context": 32768, "output": 8192 }
+        }
+      }
+    },
+    "local-small": {
+      "name": "Local rapido (llama.cpp Vulkan)",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "http://127.0.0.1:8081/v1"
+      },
+      "models": {
+        "qwen3-4b": {
+          "name": "Qwen3 4B (local)",
+          "limit": { "context": 8192, "output": 4096 }
+        }
+      }
+    },
+    "local-coder": {
+      "name": "Local coder (llama.cpp Vulkan)",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "http://127.0.0.1:8082/v1"
+      },
+      "models": {
+        "qwen3-8b": {
+          "name": "Qwen3 8B coder (local)",
+          "limit": { "context": 32768, "output": 8192 }
+        }
+      }
+    }
+  },
+  "agents": {
+    "build": { "model": "local/gpt-oss-20b" },
+    "plan": { "model": "local/gpt-oss-20b" },
+    "explore": { "model": "local-small/qwen3-4b" },
+    "general": { "model": "local-small/qwen3-4b" },
+    "coder": { "model": "local-coder/qwen3-8b" }
+  }
+}

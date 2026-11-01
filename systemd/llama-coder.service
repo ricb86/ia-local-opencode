@@ -1,0 +1,24 @@
+[Unit]
+Description=llama.cpp - Qwen3 8B coder local (Vulkan) para codigo
+After=default.target
+# Modelo denso: usa ~5,5 GB de VRAM, entao e exclusivo (Conflicts= abaixo).
+# Obs.: nao use --chat-template-kwargs enable_thinking=false — quebra o tool calling.
+Conflicts=llama-main.service llama-small.service
+
+# nao ficar reiniciando em loop se o modelo estiver corrompido/ausente
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+Environment=LD_LIBRARY_PATH=%h/.local/share/llama.cpp/current
+Environment=AMD_VULKAN_ICD=RADV
+Environment=MANGOHUD=0
+ExecStart=%h/.local/share/llama.cpp/current/llama-server --model %h/Modelos/qwen3-8b-q4_k_m.gguf --host 127.0.0.1 --port 8082 --jinja --flash-attn on --threads 8 --threads-batch 12 --no-webui -ngl 99 -c 16384 -ctk q8_0 -ctv q8_0
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:%h/.local/share/llama.cpp/logs/service-coder.log
+StandardError=append:%h/.local/share/llama.cpp/logs/service-coder.log
+
+[Install]
+WantedBy=default.target

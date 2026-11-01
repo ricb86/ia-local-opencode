@@ -1,0 +1,14 @@
+# modelos GGUF (12 GB) ficam em ~/Modelos, nunca no repo
+*.gguf
+*.ggml
+*.bin
+
+# saida de teste local
+.teste/
+bench*.txt
+*.log
+
+# editores
+.vscode/
+.idea/
+*.swp
